@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <title>Gửi Mỹ Quyên</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #e0e0e0;
+            margin: 0;
+            font-family: sans-serif;
+            flex-direction: column;
+        }
+        canvas {
+            background-color: white;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+            max-width: 95vw;
+            max-height: 85vh;
+        }
+        #status {
+            margin-top: 15px;
+            color: #444;
+            font-size: 1.1em;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="myCanvas"></canvas>
+    <div id="status">Đang tải...</div>
+
+    <script>
+        // === CẤU HÌNH ===
+        const IMAGE_SRC = 'hinh_ve.jpg'; 
+        const DURATION_MS = 15000;       // 15 GIÂY
+        const THRESHOLD = 180;           
+        const NUM_BRUSHES = 80;          
+        const SEARCH_RADIUS = 3;         
+
+        const canvas = document.getElementById('myCanvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
+        
+        let blackPixels = []; 
+        let visitedMap = [];  
+        let imgWidth, imgHeight;
+        let totalBlackPixels = 0;
+        let drawnCount = 0;
+
+        const img = new Image();
+        img.src = IMAGE_SRC;
+        img.crossOrigin = "Anonymous";
+
+        img.onerror = () => {
+            statusDiv.innerHTML = "<span style='color:red'>Lỗi: Không thấy ảnh 'hinh_ve.jpg'. Hãy để ảnh cùng thư mục với file này.</span>";
+        };
+
+        img.onload = () => {
+            statusDiv.innerText = "Đang xử lý dữ liệu ảnh...";
+            imgWidth = img.width;
+            imgHeight = img.height;
+            canvas.width = imgWidth;
+            canvas.height = imgHeight;
+
+            const memCanvas = document.createElement('canvas');
+            memCanvas.width = imgWidth;
+            memCanvas.height = imgHeight;
+            const memCtx = memCanvas.getContext('2d');
+            memCtx.drawImage(img, 0, 0);
+            const imageData = memCtx.getImageData(0, 0, imgWidth, imgHeight).data;
+
+            visitedMap = Array(imgHeight).fill().map(() => Array(imgWidth).fill(false));
+
+            for (let y = 0; y < imgHeight; y++) {
+                for (let x = 0; x < imgWidth; x++) {
+                    const i = (y * imgWidth + x) * 4;
+                    const brightness = 0.299 * imageData[i] + 0.587 * imageData[i + 1] + 0.114 * imageData[i + 2];
+                    
+                    if (brightness < THRESHOLD) {
+                        const color = `rgba(${imageData[i]},${imageData[i+1]},${imageData[i+2]},0.8)`;
+                        blackPixels.push({x, y, color}); 
+                    } else {
+                        visitedMap[y][x] = true;
+                    }
+                }
+            }
+            totalBlackPixels = blackPixels.length;
+            
+            if (totalBlackPixels === 0) {
+                 statusDiv.innerText = "Lỗi: Ảnh quá sáng hoặc không tìm thấy nét vẽ.";
+                 return;
+            }
+
+            shuffleArray(blackPixels);
+            startDrawingAnimation();
+        };
+
+        function startDrawingAnimation() {
+            statusDiv.innerText = `Bắt đầu vẽ... (15 giây)`;
+            
+            let brushes = [];
+            for (let i = 0; i < NUM_BRUSHES; i++) {
+                brushes.push({ currentPixel: getUnvisitedPixel() });
+            }
+
+            let startTime = null;
+
+            function animate(timestamp) {
+                if (!startTime) startTime = timestamp;
+                const elapsed = timestamp - startTime;
+                const progress = Math.min(elapsed / DURATION_MS, 1);
+                const targetCount = Math.floor(totalBlackPixels * progress);
+
+                const loopsPerFrame = 200; 
+                let loopCount = 0;
+
+                while (drawnCount < targetCount && drawnCount < totalBlackPixels && loopCount < loopsPerFrame) {
+                    brushes.forEach(brush => {
+                        if (!brush.currentPixel) {
+                            brush.currentPixel = getUnvisitedPixel();
+                            if (!brush.currentPixel) return;
+                        }
+
+                        drawPixel(brush.currentPixel);
+
+                        let nextPixel = findNearestUnvisitedNeighbor(brush.currentPixel.x, brush.currentPixel.y);
+                        
+                        if (!nextPixel) {
+                            nextPixel = getUnvisitedPixel();
+                        }
+                        brush.currentPixel = nextPixel;
+                    });
+                    loopCount++;
+                }
+
+                if (drawnCount < totalBlackPixels) {
+                    const percent = Math.floor((drawnCount / totalBlackPixels) * 100);
+                    statusDiv.innerText = `Đang vẽ: ${percent}%`;
+                    requestAnimationFrame(animate);
+                } else {
+                    drawRemainingPixels(); 
+                    statusDiv.innerText = "Hoàn thành!";
+                }
+            }
+            requestAnimationFrame(animate);
+        }
+
+        function drawPixel(pixel) {
+            if (!pixel || visitedMap[pixel.y][pixel.x]) return;
+            
+            ctx.fillStyle = pixel.color;
+            ctx.beginPath();
+            ctx.arc(pixel.x, pixel.y, 0.8, 0, Math.PI * 2); 
+            ctx.fill();
+
+            visitedMap[pixel.y][pixel.x] = true;
+            drawnCount++;
+        }
+
+        function findNearestUnvisitedNeighbor(cx, cy) {
+            for (let r = 1; r <= SEARCH_RADIUS; r++) { 
+                for (let dy = -r; dy <= r; dy++) {
+                    for (let dx = -r; dx <= r; dx++) {
+                        if (Math.abs(dx) !== r && Math.abs(dy) !== r) continue; 
+
+                        const nx = cx + dx;
+                        const ny = cy + dy;
+
+                        if (nx >= 0 && nx < imgWidth && ny >= 0 && ny < imgHeight) {
+                            if (!visitedMap[ny][nx]) {
+                                return {x: nx, y: ny, color: getColor(nx, ny)};
+                            }
+                        }
+                    }
+                }
+            }
+            return null;
+        }
+        
+        function getColor(x, y) {
+             return "rgba(50, 50, 50, 0.8)"; 
+        }
+
+        let pixelIndexPointer = 0;
+        function getUnvisitedPixel() {
+            while (pixelIndexPointer < blackPixels.length) {
+                const p = blackPixels[pixelIndexPointer];
+                pixelIndexPointer++;
+                if (!visitedMap[p.y][p.x]) return p;
+            }
+            return null;
+        }
+
+        function drawRemainingPixels() {
+             for(let i = 0; i < blackPixels.length; i++) {
+                 const p = blackPixels[i];
+                 if(!visitedMap[p.y][p.x]) {
+                     ctx.fillStyle = p.color;
+                     ctx.fillRect(p.x, p.y, 1, 1);
+                 }
+             }
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+    </script>
+</body>
+</html>
